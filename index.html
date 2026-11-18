@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grip tracker</title>
+<style>
+  :root {
+    --bg: #14171a; --panel: #1e2327; --line: #2f363c; --text: #eef1f3; --dim: #9aa5ad;
+    --accent: #f2a03d; --good: #5fc48a; --bad: #e0685f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main { max-width: 520px; margin: 0 auto; padding: 16px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: 0.01em; }
+  h2 { font-size: 14px; margin: 28px 0 8px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  button {
+    font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 14px; min-height: 44px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1b1304; font-weight: 650; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { font-size: 14px; color: var(--dim); min-height: 20px; margin-bottom: 12px; }
+  #status.ok { color: var(--good); }
+  #status.err { color: var(--bad); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .live { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: end; }
+  .reps { font-size: 84px; line-height: 0.9; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .repsLabel { color: var(--dim); font-size: 14px; }
+  .side { text-align: right; color: var(--dim); font-size: 14px; }
+  .side b { color: var(--text); font-size: 18px; font-variant-numeric: tabular-nums; }
+  .barWrap { grid-column: 1 / -1; margin-top: 14px; }
+  .bar { height: 26px; border-radius: 8px; background: #0f1214; border: 1px solid var(--line); overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); transition: width 0.12s linear; }
+  .barRow { display: flex; justify-content: space-between; font-size: 13px; color: var(--dim); margin-top: 4px; }
+  .barRow b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .actions button { flex: 1 1 auto; }
+  .note { font-size: 13px; color: var(--dim); margin-top: 10px; }
+  .day { margin-top: 14px; }
+  .dayHead { font-weight: 650; margin-bottom: 6px; }
+  .set { border-top: 1px solid var(--line); padding: 8px 0; }
+  .setHead { display: flex; justify-content: space-between; font-size: 14px; color: var(--dim); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip {
+    font-size: 13px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .chip.full { border-color: var(--good); color: var(--good); }
+  .empty { color: var(--dim); font-size: 14px; }
+  #confirmBox { display: none; margin-top: 10px; }
+  #unsupported { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Grip tracker</h1>
+    <button id="connectBtn" class="primary">Connect</button>
+  </header>
+  <div id="status" role="status" aria-live="polite">Not connected.</div>
+
+  <div id="unsupported" class="panel">
+    This browser can't use Bluetooth from a web page. Open this page in Chrome on Android
+    (or Chrome or Edge on a computer), from an address that starts with https.
+  </div>
+
+  <section class="panel" aria-label="Live">
+    <div class="live">
+      <div>
+        <div class="reps" id="reps">0</div>
+        <div class="repsLabel">reps in set <span id="setNo">1</span></div>
+      </div>
+      <div class="side">
+        <div>on tracker <b id="logCount">0</b></div>
+        <div>to download <b id="unsynced">0</b></div>
+      </div>
+      <div class="barWrap">
+        <div class="bar" role="progressbar" aria-label="Percent closed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="barOuter"><div id="bar"></div></div>
+        <div class="barRow"><span>open</span><b id="pct">0%</b><span>closed</span></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="newSetBtn" disabled>New set</button>
+      <button id="syncBtn" disabled>Download reps</button>
+    </div>
+  </section>
+
+  <h2>History on this phone</h2>
+  <div id="history"></div>
+  <div class="actions">
+    <button id="exportBtn">Save as spreadsheet (CSV)</button>
+    <button id="clearBtn">Clear history</button>
+  </div>
+  <div id="confirmBox" class="panel">
+    Remove all history stored on this phone? Reps still on the tracker are not affected.
+    <div class="actions">
+      <button id="clearYes">Yes, remove</button>
+      <button id="clearNo">Cancel</button>
+    </div>
+  </div>
+  <p class="note">History is kept in this browser on this phone only. Save a spreadsheet copy now and then.</p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // Must match the numbers in the tracker sketch.
+  var SERVICE = "7a0e0001-6f2c-4d5a-9b1e-3c8d5f2a4b10";
+  var LIVE    = "7a0e0002-6f2c-4d5a-9b1e-3c8d5f2a4b10";
+  var CONTROL = "7a0e0003-6f2c-4d5a-9b1e-3c8d5f2a4b10";
+  var LOG     = "7a0e0004-6f2c-4d5a-9b1e-3c8d5f2a4b10";
+  var STORE_KEY = "gripTrackerReps";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var device = null, controlChar = null, connected = false, wantConnection = false;
+  var syncing = false, incoming = [], lastSyncTry = 0, inRep = false;
+  var reps = loadReps();
+
+  // ---------- storage ----------
+  function loadReps() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function saveReps() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(reps)); } catch (e) { setStatus("Could not save history on this phone.", "err"); }
+  }
+  function repKey(r) { return r.session + "-" + r.set + "-" + r.rep; }
+
+  // ---------- status ----------
+  function setStatus(text, cls) {
+    var s = $("status");
+    s.textContent = text;
+    s.className = cls || "";
+  }
+  function setConnected(on) {
+    connected = on;
+    $("newSetBtn").disabled = !on;
+    $("syncBtn").disabled = !on;
+    $("connectBtn").textContent = on ? "Disconnect" : "Connect";
+  }
+
+  // ---------- Bluetooth ----------
+  // Only one Bluetooth request may be in flight at a time, so they are queued.
+  var queue = Promise.resolve();
+  function enqueue(fn) {
+    queue = queue.then(fn, fn);
+    return queue;
+  }
+  function send(bytes) {
+    return enqueue(function () {
+      if (!controlChar) return Promise.reject(new Error("not connected"));
+      var data = new Uint8Array(bytes);
+      return controlChar.writeValueWithResponse ? controlChar.writeValueWithResponse(data) : controlChar.writeValue(data);
+    });
+  }
+  function u32(n) { return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]; }
+  function letter(ch) { return ch.charCodeAt(0); }
+
+  function withTimeout(promise, ms) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error("timed out")); }, ms);
+      promise.then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+
+  // Connecting sometimes fails on the first attempt, so try a few times.
+  function openLink(attempt) {
+    setStatus("Connecting" + (attempt > 1 ? " (attempt " + attempt + ")" : "") + "...");
+    return withTimeout(device.gatt.connect(), 15000).catch(function (e) {
+      try { device.gatt.disconnect(); } catch (x) {}
+      if (attempt >= 4 || !wantConnection) throw e;
+      return new Promise(function (r) { setTimeout(r, 800); }).then(function () { return openLink(attempt + 1); });
+    });
+  }
+
+  function setUp(server) {
+    var service;
+    return server.getPrimaryService(SERVICE).then(function (s) {
+      service = s;
+      return service.getCharacteristic(CONTROL);
+    }).then(function (c) {
+      controlChar = c;
+      return service.getCharacteristic(LIVE);
+    }).then(function (c) {
+      c.addEventListener("characteristicvaluechanged", onLive);
+      return c.startNotifications();
+    }).then(function () {
+      return service.getCharacteristic(LOG);
+    }).then(function (c) {
+      c.addEventListener("characteristicvaluechanged", onLog);
+      return c.startNotifications();
+    }).then(function () {
+      setConnected(true);
+      setStatus("Connected.", "ok");
+      // Give the tracker the time of day, then fetch anything it has saved.
+      return send([letter("T")].concat(u32(Math.floor(Date.now() / 1000))));
+    }).then(function () {
+      startSync();
+    });
+  }
+
+  function connect() {
+    wantConnection = true;
+    var pick = device ? Promise.resolve(device) : navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+    pick.then(function (d) {
+      if (device !== d) {
+        device = d;
+        device.addEventListener("gattserverdisconnected", onDisconnected);
+      }
+      return openLink(1);
+    }).then(setUp).catch(function (e) {
+      setConnected(false);
+      if (e && e.name === "NotFoundError") setStatus("No tracker chosen.");
+      else setStatus("Could not connect: " + (e && e.message ? e.message : e) + ". Tap Connect to try again.", "err");
+    });
+  }
+
+  function onDisconnected() {
+    controlChar = null;
+    syncing = false;
+    setConnected(false);
+    if (!wantConnection) { setStatus("Disconnected."); return; }
+    setStatus("Connection lost. Reconnecting...");
+    openLink(1).then(setUp).catch(function () {
+      setStatus("Connection lost. Tap Connect when the tracker is nearby.", "err");
+    });
+  }
+
+  function disconnect() {
+    wantConnection = false;
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    else { setConnected(false); setStatus("Disconnected."); }
+  }
+
+  // ---------- messages from the tracker ----------
+  function onLive(ev) {
+    var v = ev.target.value;
+    if (v.byteLength < 8) return;
+    var pct = Math.min(100, v.getUint8(0));
+    inRep = (v.getUint8(1) & 1) === 1;
+    var unsynced = v.getUint16(6, true);
+    $("bar").style.width = pct + "%";
+    $("barOuter").setAttribute("aria-valuenow", pct);
+    $("pct").textContent = pct + "%";
+    $("reps").textContent = v.getUint8(2);
+    $("setNo").textContent = v.getUint8(3);
+    $("logCount").textContent = v.getUint16(4, true);
+    $("unsynced").textContent = unsynced;
+    // Fetch new reps automatically between squeezes.
+    if (unsynced > 0 && !syncing && !inRep && Date.now() - lastSyncTry > 4000) startSync();
+  }
+
+  function onLog(ev) {
+    var v = ev.target.value;
+    if (v.byteLength === 8 && v.getUint32(0, true) === 0xFFFFFFFF) {
+      finishSync(v.getUint32(4, true));
+      return;
+    }
+    if (v.byteLength < 20) return;
+    var clock = v.getUint8(9) === 1;
+    incoming.push({
+      session: v.getUint16(4, true),
+      set: v.getUint8(6),
+      rep: v.getUint8(7),
+      deepest: v.getUint8(8),
+      duration: v.getUint16(10, true) / 10,
+      hold: v.getUint16(12, true) / 10,
+      time: clock ? v.getUint32(16, true) : null,
+      received: Math.floor(Date.now() / 1000)
+    });
+  }
+
+  function startSync() {
+    if (!connected || syncing) return;
+    syncing = true;
+    incoming = [];
+    lastSyncTry = Date.now();
+    send([letter("S")]).catch(function () { syncing = false; });
+    // If the tracker never answers, give up so a later attempt can run.
+    setTimeout(function () { if (syncing && Date.now() - lastSyncTry >= 20000) syncing = false; }, 20500);
+  }
+
+  function finishSync(total) {
+    var known = {};
+    reps.forEach(function (r) { known[repKey(r)] = true; });
+    var added = 0;
+    incoming.forEach(function (r) {
+      if (!known[repKey(r)]) { reps.push(r); known[repKey(r)] = true; added++; }
+    });
+    incoming = [];
+    if (added) { saveReps(); renderHistory(); }
+    // Tell the tracker these are safely stored, so it doesn't send them again.
+    send([letter("A")].concat(u32(total))).catch(function () {});
+    syncing = false;
+    if (added) setStatus("Connected. Downloaded " + added + " rep" + (added === 1 ? "" : "s") + ".", "ok");
+  }
+
+  // ---------- history ----------
+  function dayLabel(r) {
+    if (r.time === null) return "Date unknown";
+    return new Date(r.time * 1000).toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  }
+
+  function renderHistory() {
+    var box = $("history");
+    box.textContent = "";
+    if (!reps.length) {
+      var e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No reps downloaded yet.";
+      box.appendChild(e);
+      return;
+    }
+    var sorted = reps.slice().sort(function (a, b) {
+      var ta = a.time === null ? a.received : a.time, tb = b.time === null ? b.received : b.time;
+      return tb - ta || b.session - a.session || b.set - a.set || b.rep - a.rep;
+    });
+    var days = [], dayMap = {};
+    sorted.forEach(function (r) {
+      var d = dayLabel(r);
+      if (!dayMap[d]) { dayMap[d] = { label: d, sets: [], setMap: {} }; days.push(dayMap[d]); }
+      var k = r.session + "-" + r.set;
+      if (!dayMap[d].setMap[k]) { dayMap[d].setMap[k] = { session: r.session, set: r.set, reps: [] }; dayMap[d].sets.push(dayMap[d].setMap[k]); }
+      dayMap[d].setMap[k].reps.push(r);
+    });
+    days.forEach(function (d) {
+      var day = document.createElement("div");
+      day.className = "day panel";
+      var head = document.createElement("div");
+      head.className = "dayHead";
+      var count = d.sets.reduce(function (n, s) { return n + s.reps.length; }, 0);
+      head.textContent = d.label + " · " + count + " rep" + (count === 1 ? "" : "s");
+      day.appendChild(head);
+      d.sets.forEach(function (s) {
+        s.reps.sort(function (a, b) { return a.rep - b.rep; });
+        var hold = s.reps.reduce(function (n, r) { return n + r.hold; }, 0);
+        var row = document.createElement("div");
+        row.className = "set";
+        var sh = document.createElement("div");
+        sh.className = "setHead";
+        var left = document.createElement("span");
+        left.textContent = "Session " + s.session + ", set " + s.set + " · " + s.reps.length + " rep" + (s.reps.length === 1 ? "" : "s");
+        var right = document.createElement("span");
+        right.textContent = "hold " + hold.toFixed(1) + " s";
+        sh.appendChild(left); sh.appendChild(right);
+        row.appendChild(sh);
+        var chips = document.createElement("div");
+        chips.className = "chips";
+        s.reps.forEach(function (r) {
+          var c = document.createElement("span");
+          c.className = "chip" + (r.deepest >= 98 ? " full" : "");
+          c.textContent = r.deepest + "% · " + r.hold.toFixed(1) + " s";
+          chips.appendChild(c);
+        });
+        row.appendChild(chips);
+        day.appendChild(row);
+      });
+      box.appendChild(day);
+    });
+  }
+
+  function exportCsv() {
+    var lines = ["date_time,session,set,rep,deepest_pct,duration_s,hold_s"];
+    reps.slice().sort(function (a, b) {
+      return a.session - b.session || a.set - b.set || a.rep - b.rep;
+    }).forEach(function (r) {
+      var when = r.time === null ? "" : new Date(r.time * 1000).toISOString();
+      lines.push([when, r.session, r.set, r.rep, r.deepest, r.duration.toFixed(1), r.hold.toFixed(1)].join(","));
+    });
+    var blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "grip-tracker-" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  }
+
+  // ---------- buttons ----------
+  $("connectBtn").addEventListener("click", function () { if (connected || wantConnection && device && device.gatt.connected) disconnect(); else connect(); });
+  $("newSetBtn").addEventListener("click", function () { send([letter("N")]).catch(function () {}); });
+  $("syncBtn").addEventListener("click", function () { syncing = false; startSync(); });
+  $("exportBtn").addEventListener("click", exportCsv);
+  $("clearBtn").addEventListener("click", function () { $("confirmBox").style.display = "block"; });
+  $("clearNo").addEventListener("click", function () { $("confirmBox").style.display = "none"; });
+  $("clearYes").addEventListener("click", function () {
+    reps = []; saveReps(); renderHistory(); $("confirmBox").style.display = "none";
+  });
+
+  if (!navigator.bluetooth) {
+    $("unsupported").style.display = "block";
+    $("connectBtn").disabled = true;
+    setStatus("Bluetooth is not available in this browser.", "err");
+  }
+  renderHistory();
+})();
+</script>
+</body>
+</html>
