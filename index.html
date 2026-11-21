@@ -54,6 +54,16 @@
   }
   .chip.full { border-color: var(--good); color: var(--good); }
   .empty { color: var(--dim); font-size: 14px; }
+  .field { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .field label { color: var(--dim); font-size: 14px; }
+  select {
+    font: inherit; color: var(--text); background: #0f1214; border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 10px; min-height: 44px; flex: 1 1 auto;
+  }
+  select:disabled { opacity: 0.45; }
+  select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #calNote { font-size: 13px; color: var(--dim); margin-top: 6px; min-height: 18px; }
+  #calNote.warn { color: var(--accent); }
   #confirmBox { display: none; margin-top: 10px; }
   #unsupported { display: none; }
 </style>
@@ -80,6 +90,7 @@
       <div class="side">
         <div>on tracker <b id="logCount">0</b></div>
         <div>to download <b id="unsynced">0</b></div>
+        <div>battery <b id="battery">--</b></div>
       </div>
       <div class="barWrap">
         <div class="bar" role="progressbar" aria-label="Percent closed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="barOuter"><div id="bar"></div></div>
@@ -90,6 +101,21 @@
       <button id="newSetBtn" disabled>New set</button>
       <button id="syncBtn" disabled>Download reps</button>
     </div>
+  </section>
+
+  <h2>Tracker settings</h2>
+  <section class="panel" aria-label="Tracker settings">
+    <div class="field" style="margin-top:0">
+      <label for="gripperSel">Gripper</label>
+      <select id="gripperSel" disabled><option>Connect to choose</option></select>
+    </div>
+    <div id="calNote"></div>
+    <div class="actions">
+      <button id="calBtn" disabled>Calibrate</button>
+      <button id="openBtn" disabled>Set open only</button>
+    </div>
+    <p class="note">Calibrate: squeeze the gripper fully closed and release. Set open only is for a gripper
+      you can't close: it saves the resting position and borrows the range from a lighter gripper of the same brand.</p>
   </section>
 
   <h2>History on this phone</h2>
@@ -117,12 +143,14 @@
   var LIVE    = "7a0e0002-6f2c-4d5a-9b1e-3c8d5f2a4b10";
   var CONTROL = "7a0e0003-6f2c-4d5a-9b1e-3c8d5f2a4b10";
   var LOG     = "7a0e0004-6f2c-4d5a-9b1e-3c8d5f2a4b10";
+  var CONFIG  = "7a0e0005-6f2c-4d5a-9b1e-3c8d5f2a4b10";
   var STORE_KEY = "gripTrackerReps";
 
   var $ = function (id) { return document.getElementById(id); };
   var device = null, controlChar = null, connected = false, wantConnection = false;
   var syncing = false, incoming = [], lastSyncTry = 0, inRep = false;
   var reps = loadReps();
+  var gripperNames = [], shownGripper = -1, shownCal = -1, pickedAt = 0;
 
   // ---------- storage ----------
   function loadReps() {
@@ -143,6 +171,10 @@
     connected = on;
     $("newSetBtn").disabled = !on;
     $("syncBtn").disabled = !on;
+    $("calBtn").disabled = !on || !gripperNames.length;
+    $("openBtn").disabled = !on || !gripperNames.length;
+    $("gripperSel").disabled = !on || !gripperNames.length;
+    if (!on) { $("battery").textContent = "--"; $("calNote").textContent = ""; }
     $("connectBtn").textContent = on ? "Disconnect" : "Connect";
   }
 
@@ -197,6 +229,11 @@
       c.addEventListener("characteristicvaluechanged", onLog);
       return c.startNotifications();
     }).then(function () {
+      // The list of grippers. Older tracker sketches don't have it, and that is fine.
+      return service.getCharacteristic(CONFIG).then(function (c) { return c.readValue(); }).then(function (v) {
+        fillGrippers(new TextDecoder().decode(v).split("|").filter(function (n) { return n.length > 0; }));
+      }).catch(function () { fillGrippers([]); });
+    }).then(function () {
       setConnected(true);
       setStatus("Connected.", "ok");
       // Give the tracker the time of day, then fetch anything it has saved.
@@ -239,6 +276,41 @@
     else { setConnected(false); setStatus("Disconnected."); }
   }
 
+  // ---------- grippers ----------
+  function fillGrippers(names) {
+    gripperNames = names;
+    shownGripper = -1; shownCal = -1;
+    var sel = $("gripperSel");
+    sel.textContent = "";
+    if (!names.length) {
+      var o = document.createElement("option");
+      o.textContent = "Not available on this tracker";
+      sel.appendChild(o);
+      return;
+    }
+    names.forEach(function (n, i) {
+      var opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = n;
+      sel.appendChild(opt);
+    });
+  }
+  function showGripper(index, cal) {
+    if (!gripperNames.length) return;
+    // Just after choosing on the phone, wait for the tracker to catch up before trusting its report.
+    if (Date.now() - pickedAt < 1500) return;
+    if (index !== shownGripper && index < gripperNames.length) {
+      $("gripperSel").value = index;
+      shownGripper = index;
+    }
+    if (cal !== shownCal) {
+      var note = $("calNote");
+      note.className = cal === 1 ? "" : "warn";
+      note.textContent = cal === 1 ? "Calibrated." : cal === 2 ? "Estimated range (set open only)." : "Not set up yet: calibrate this gripper.";
+      shownCal = cal;
+    }
+  }
+
   // ---------- messages from the tracker ----------
   function onLive(ev) {
     var v = ev.target.value;
@@ -253,6 +325,11 @@
     $("setNo").textContent = v.getUint8(3);
     $("logCount").textContent = v.getUint16(4, true);
     $("unsynced").textContent = unsynced;
+    if (v.byteLength >= 9) {
+      var b = v.getUint8(8);
+      $("battery").textContent = b === 255 ? "--" : b + "%";
+    }
+    if (v.byteLength >= 11) showGripper(v.getUint8(9), v.getUint8(10));
     // Fetch new reps automatically between squeezes.
     if (unsynced > 0 && !syncing && !inRep && Date.now() - lastSyncTry > 4000) startSync();
   }
@@ -265,7 +342,10 @@
     }
     if (v.byteLength < 20) return;
     var clock = v.getUint8(9) === 1;
+    var g = v.getUint8(14) - 1;                 // 0 in the record means "not recorded"
     incoming.push({
+      gripper: g >= 0 && g < gripperNames.length ? gripperNames[g] : "",
+      estimate: (v.getUint8(15) & 1) === 1,
       session: v.getUint16(4, true),
       set: v.getUint8(6),
       rep: v.getUint8(7),
@@ -327,7 +407,7 @@
       var d = dayLabel(r);
       if (!dayMap[d]) { dayMap[d] = { label: d, sets: [], setMap: {} }; days.push(dayMap[d]); }
       var k = r.session + "-" + r.set;
-      if (!dayMap[d].setMap[k]) { dayMap[d].setMap[k] = { session: r.session, set: r.set, reps: [] }; dayMap[d].sets.push(dayMap[d].setMap[k]); }
+      if (!dayMap[d].setMap[k]) { dayMap[d].setMap[k] = { session: r.session, set: r.set, gripper: r.gripper || "", estimate: !!r.estimate, reps: [] }; dayMap[d].sets.push(dayMap[d].setMap[k]); }
       dayMap[d].setMap[k].reps.push(r);
     });
     days.forEach(function (d) {
@@ -346,7 +426,7 @@
         var sh = document.createElement("div");
         sh.className = "setHead";
         var left = document.createElement("span");
-        left.textContent = "Session " + s.session + ", set " + s.set + " · " + s.reps.length + " rep" + (s.reps.length === 1 ? "" : "s");
+        left.textContent = (s.gripper ? s.gripper + (s.estimate ? "~" : "") + " · " : "") + "Session " + s.session + ", set " + s.set + " · " + s.reps.length + " rep" + (s.reps.length === 1 ? "" : "s");
         var right = document.createElement("span");
         right.textContent = "hold " + hold.toFixed(1) + " s";
         sh.appendChild(left); sh.appendChild(right);
@@ -367,12 +447,12 @@
   }
 
   function exportCsv() {
-    var lines = ["date_time,session,set,rep,deepest_pct,duration_s,hold_s"];
+    var lines = ["date_time,session,set,rep,deepest_pct,duration_s,hold_s,gripper,estimated_range"];
     reps.slice().sort(function (a, b) {
       return a.session - b.session || a.set - b.set || a.rep - b.rep;
     }).forEach(function (r) {
       var when = r.time === null ? "" : new Date(r.time * 1000).toISOString();
-      lines.push([when, r.session, r.set, r.rep, r.deepest, r.duration.toFixed(1), r.hold.toFixed(1)].join(","));
+      lines.push([when, r.session, r.set, r.rep, r.deepest, r.duration.toFixed(1), r.hold.toFixed(1), r.gripper || "", r.estimate ? 1 : 0].join(","));
     });
     var blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
     var a = document.createElement("a");
@@ -388,6 +468,20 @@
   $("connectBtn").addEventListener("click", function () { if (connected || wantConnection && device && device.gatt.connected) disconnect(); else connect(); });
   $("newSetBtn").addEventListener("click", function () { send([letter("N")]).catch(function () {}); });
   $("syncBtn").addEventListener("click", function () { syncing = false; startSync(); });
+  $("gripperSel").addEventListener("change", function () {
+    var i = parseInt($("gripperSel").value, 10);
+    if (isNaN(i)) return;
+    pickedAt = Date.now(); shownGripper = i; shownCal = -1;
+    send([letter("G"), i]).catch(function () {});
+  });
+  $("calBtn").addEventListener("click", function () {
+    setStatus("Calibrating: squeeze fully closed, then release. Watch the tracker's screen.", "ok");
+    send([letter("C")]).catch(function () {});
+  });
+  $("openBtn").addEventListener("click", function () {
+    setStatus("Setting open: leave the gripper open and still.", "ok");
+    send([letter("O")]).catch(function () {});
+  });
   $("exportBtn").addEventListener("click", exportCsv);
   $("clearBtn").addEventListener("click", function () { $("confirmBox").style.display = "block"; });
   $("clearNo").addEventListener("click", function () { $("confirmBox").style.display = "none"; });
