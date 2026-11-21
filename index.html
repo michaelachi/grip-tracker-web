@@ -123,6 +123,7 @@
   <div class="actions">
     <button id="exportBtn">Save as spreadsheet (CSV)</button>
     <button id="clearBtn">Clear history</button>
+    <button id="resyncBtn" disabled>Download everything again</button>
   </div>
   <div id="confirmBox" class="panel">
     Remove all history stored on this phone? Reps still on the tracker are not affected.
@@ -131,7 +132,9 @@
       <button id="clearNo">Cancel</button>
     </div>
   </div>
-  <p class="note">History is kept in this browser on this phone only. Save a spreadsheet copy now and then.</p>
+  <p class="note">History is kept in this browser on this phone only. Save a spreadsheet copy now and then.
+    Download everything again fetches every rep still stored on the tracker, for a new phone or after clearing by mistake.
+    Reps already here are not duplicated.</p>
 </main>
 
 <script>
@@ -150,7 +153,7 @@
   var device = null, controlChar = null, connected = false, wantConnection = false;
   var syncing = false, incoming = [], lastSyncTry = 0, inRep = false;
   var reps = loadReps();
-  var gripperNames = [], shownGripper = -1, shownCal = -1, pickedAt = 0;
+  var gripperNames = [], shownGripper = -1, shownCal = -1, pickedAt = 0, fullSync = false;
 
   // ---------- storage ----------
   function loadReps() {
@@ -171,6 +174,7 @@
     connected = on;
     $("newSetBtn").disabled = !on;
     $("syncBtn").disabled = !on;
+    $("resyncBtn").disabled = !on;
     $("calBtn").disabled = !on || !gripperNames.length;
     $("openBtn").disabled = !on || !gripperNames.length;
     $("gripperSel").disabled = !on || !gripperNames.length;
@@ -357,12 +361,13 @@
     });
   }
 
-  function startSync() {
+  // fromStart: ask for every rep on the tracker, not only the ones it has not sent before.
+  function startSync(fromStart) {
     if (!connected || syncing) return;
     syncing = true;
     incoming = [];
     lastSyncTry = Date.now();
-    send([letter("S")]).catch(function () { syncing = false; });
+    send(fromStart === true ? [letter("S")].concat(u32(0)) : [letter("S")]).catch(function () { syncing = false; });
     // If the tracker never answers, give up so a later attempt can run.
     setTimeout(function () { if (syncing && Date.now() - lastSyncTry >= 20000) syncing = false; }, 20500);
   }
@@ -380,6 +385,8 @@
     send([letter("A")].concat(u32(total))).catch(function () {});
     syncing = false;
     if (added) setStatus("Connected. Downloaded " + added + " rep" + (added === 1 ? "" : "s") + ".", "ok");
+    else if (fullSync) setStatus("Connected. Nothing new: this phone already has every rep on the tracker.", "ok");
+    fullSync = false;
   }
 
   // ---------- history ----------
@@ -468,6 +475,11 @@
   $("connectBtn").addEventListener("click", function () { if (connected || wantConnection && device && device.gatt.connected) disconnect(); else connect(); });
   $("newSetBtn").addEventListener("click", function () { send([letter("N")]).catch(function () {}); });
   $("syncBtn").addEventListener("click", function () { syncing = false; startSync(); });
+  $("resyncBtn").addEventListener("click", function () {
+    syncing = false; fullSync = true;
+    setStatus("Fetching every rep on the tracker...", "ok");
+    startSync(true);
+  });
   $("gripperSel").addEventListener("change", function () {
     var i = parseInt($("gripperSel").value, 10);
     if (isNaN(i)) return;
